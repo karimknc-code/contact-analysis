@@ -405,4 +405,4 @@ if (individual_file_1 or individual_file_2) and st.session_state.topline_data is
         st.code(traceback.format_exc())
 
 elif (individual_file_1 or individual_file_2):
-    st.warning("⚠️ Upload Topline Data first")
+    st.warning("⚠️ Upload Topline Data first") 
