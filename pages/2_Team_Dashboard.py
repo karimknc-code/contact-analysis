@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -134,12 +135,16 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     contact_rate = round(contacted / doors * 100, 1) if doors > 0 else 0
     unique_surveys = s_df["Voter File VANID"].nunique() if not s_df.empty and "Voter File VANID" in s_df.columns else 0
 
-    # Days active — parse properly to avoid counting same day twice
-    if "DateCanvassed" in c_df.columns:
-        parsed = parse_dates(c_df["DateCanvassed"]).dropna()
-        days_active = int(parsed.nunique())
-        avg_per_day = round(doors / days_active, 1) if days_active > 0 else 0
-        daily = parsed.value_counts()
+    # Days active — use ALL data for this canvasser across all weeks, not just selected week
+    # This gives true activity pattern rather than single-week view (most canvassers go out 1 day/week)
+    all_canvasser_rows = team_c_df[team_c_df["CanvassedBy"] == name] if "CanvassedBy" in team_c_df.columns else c_df
+    if "DateCanvassed" in all_canvasser_rows.columns:
+        parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], errors="coerce", dayfirst=False).dt.normalize().dropna()
+        days_active = int(parsed_all.nunique())
+        total_doors_all = len(all_canvasser_rows)
+        avg_per_day = round(total_doors_all / days_active, 1) if days_active > 0 else 0
+        # Consistency check across all days
+        daily = parsed_all.value_counts()
         if len(daily) > 1 and daily.mean() > 0:
             cv = daily.std() / daily.mean()
             if cv > 0.8:
@@ -364,7 +369,8 @@ all_results = {}
 for name in canvasser_names:
     c = wk_contacts[wk_contacts["CanvassedBy"] == name]
     s = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
-    all_results[name] = compute_integrity(name, c, s, wk_contacts)
+    # Pass full contact_df (all weeks) so days_active and avg_per_day reflect entire history
+    all_results[name] = compute_integrity(name, c, s, contact_df)
 
 # ─── IMPOSSIBLE PATH ALERT STRIP ─────────────────────────────────────────────
 flagged_names = [n for n in canvasser_names if all_results[n]["impossible_count"] > 0]
@@ -450,13 +456,20 @@ for name in display_names:
                     unsafe_allow_html=True
                 )
 
-        mc1,mc2,mc3,mc4,mc5,mc6 = st.columns(6)
-        mc1.metric("Doors",          r["doors"])
-        mc2.metric("Contacted",      r["contacted"])
-        mc3.metric("Surveys",        r["surveys"])
-        mc4.metric("Not Home %",     str(r["not_home_pct"]) + "%")
-        mc5.metric("Avg Doors/Day",  r["avg_per_day"])
-        mc6.metric("Days Active",    r["days_active"])
+        # Days worked THIS week
+        if "DateCanvassed" in c_df.columns:
+            days_this_week = int(pd.to_datetime(c_df["DateCanvassed"], errors="coerce").dt.normalize().dropna().nunique())
+        else:
+            days_this_week = 0
+
+        mc1,mc2,mc3,mc4,mc5,mc6,mc7 = st.columns(7)
+        mc1.metric("Doors",           r["doors"])
+        mc2.metric("Contacted",       r["contacted"])
+        mc3.metric("Surveys",         r["surveys"])
+        mc4.metric("Not Home %",      str(r["not_home_pct"]) + "%")
+        mc5.metric("Days This Week",  days_this_week)
+        mc6.metric("Avg Doors/Day",   r["avg_per_day"])
+        mc7.metric("Total Days",      r["days_active"])
 
         with st.expander("🔍 Deep dive — " + name.split(",")[0].strip()):
             c_df = wk_contacts[wk_contacts["CanvassedBy"] == name]
@@ -608,4 +621,4 @@ if selected_q:
             layout3["xaxis"] = dict(showgrid=False, tickangle=-30)
             layout3["legend"] = dict(font=dict(size=10))
             fig3.update_layout(**layout3)
-            st.plotly_chart(fig3, use_container_width=True) 
+            st.plotly_chart(fig3, use_container_width=True)
