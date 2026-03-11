@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -456,6 +455,9 @@ for name in display_names:
                     unsafe_allow_html=True
                 )
 
+        c_df = wk_contacts[wk_contacts["CanvassedBy"] == name]
+        s_df = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
+
         # Days worked THIS week
         if "DateCanvassed" in c_df.columns:
             days_this_week = int(pd.to_datetime(c_df["DateCanvassed"], errors="coerce").dt.normalize().dropna().nunique())
@@ -472,8 +474,6 @@ for name in display_names:
         mc7.metric("Total Days",      r["days_active"])
 
         with st.expander("🔍 Deep dive — " + name.split(",")[0].strip()):
-            c_df = wk_contacts[wk_contacts["CanvassedBy"] == name]
-            s_df = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
 
             ch1, ch2 = st.columns(2)
             with ch1:
