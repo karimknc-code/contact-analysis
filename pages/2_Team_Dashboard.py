@@ -893,4 +893,4 @@ if selected_q:
                 yaxis=dict(showgrid=True, gridcolor="#1e2d4a")
             )
             st.plotly_chart(fig3, use_container_width=True)
-            st.caption("Outliers in this chart — canvassers with very different response distributions vs the team — are worth investigating.")
+            st.caption("Outliers in this chart — canvassers with very different response distributions vs the team — are worth investigating.") 
