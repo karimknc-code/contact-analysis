@@ -122,7 +122,8 @@ def base_layout(height=260):
 def compute_integrity(name, c_df, s_df, team_c_df):
     r = dict(score="clean", perf_flags=[], integrity_flags=[], script_violations=[],
              doors=0, contacted=0, not_home_pct=0, surveys=0, days_active=0,
-             avg_per_day=0, contact_rate=0, impossible_count=0, skip_rate=0, total_surveyed=0)
+             days_this_week=0, avg_per_day=0, contact_rate=0, impossible_count=0,
+             skip_rate=0, total_surveyed=0)
 
     if c_df.empty:
         return r
@@ -134,23 +135,31 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     contact_rate = round(contacted / doors * 100, 1) if doors > 0 else 0
     unique_surveys = s_df["Voter File VANID"].nunique() if not s_df.empty and "Voter File VANID" in s_df.columns else 0
 
-    # Days active — use ALL data for this canvasser across all weeks, not just selected week
-    # This gives true activity pattern rather than single-week view (most canvassers go out 1 day/week)
-    all_canvasser_rows = team_c_df[team_c_df["CanvassedBy"] == name] if "CanvassedBy" in team_c_df.columns else c_df
-    if "DateCanvassed" in all_canvasser_rows.columns:
-        parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], errors="coerce", dayfirst=False).dt.normalize().dropna()
-        days_active = int(parsed_all.nunique())
-        total_doors_all = len(all_canvasser_rows)
-        avg_per_day = round(total_doors_all / days_active, 1) if days_active > 0 else 0
-        # Consistency check across all days
+    # Total days active — all weeks combined
+    if "CanvassedBy" in team_c_df.columns and "DateCanvassed" in team_c_df.columns:
+        all_canvasser_rows = team_c_df[team_c_df["CanvassedBy"].str.strip() == name.strip()]
+        parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
+        if parsed_all.empty:
+            parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], errors="coerce").dt.normalize().dropna()
+        days_active = int(parsed_all.nunique()) if not parsed_all.empty else 1
         daily = parsed_all.value_counts()
         if len(daily) > 1 and daily.mean() > 0:
             cv = daily.std() / daily.mean()
             if cv > 0.8:
                 r["perf_flags"].append(("⚠️ Inconsistent Daily Output", "flag-yellow"))
     else:
-        days_active = 0
-        avg_per_day = 0
+        days_active = 1
+
+    # Avg doors/day = this week's attempts ÷ days worked this week
+    if "DateCanvassed" in c_df.columns:
+        parsed_week = pd.to_datetime(c_df["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
+        if parsed_week.empty:
+            parsed_week = pd.to_datetime(c_df["DateCanvassed"], errors="coerce").dt.normalize().dropna()
+        days_this_week = int(parsed_week.nunique()) if not parsed_week.empty else 1
+        avg_per_day = round(doors / days_this_week, 1) if days_this_week > 0 else doors
+    else:
+        days_this_week = 1
+        avg_per_day = doors
 
     # Team averages
     team_doors = len(team_c_df)
@@ -168,7 +177,8 @@ def compute_integrity(name, c_df, s_df, team_c_df):
 
     r.update(dict(doors=doors, contacted=contacted, not_home_pct=not_home_pct,
                   contact_rate=contact_rate, surveys=unique_surveys,
-                  days_active=days_active, avg_per_day=avg_per_day))
+                  days_active=days_active, days_this_week=days_this_week,
+                  avg_per_day=avg_per_day))
 
     if s_df.empty or "SurveyQuestionLongName" not in s_df.columns:
         return r
@@ -458,18 +468,12 @@ for name in display_names:
         c_df = wk_contacts[wk_contacts["CanvassedBy"] == name]
         s_df = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
 
-        # Days worked THIS week
-        if "DateCanvassed" in c_df.columns:
-            days_this_week = int(pd.to_datetime(c_df["DateCanvassed"], errors="coerce").dt.normalize().dropna().nunique())
-        else:
-            days_this_week = 0
-
         mc1,mc2,mc3,mc4,mc5,mc6,mc7 = st.columns(7)
         mc1.metric("Doors",           r["doors"])
         mc2.metric("Contacted",       r["contacted"])
         mc3.metric("Surveys",         r["surveys"])
         mc4.metric("Not Home %",      str(r["not_home_pct"]) + "%")
-        mc5.metric("Days This Week",  days_this_week)
+        mc5.metric("Days This Week",  r["days_this_week"])
         mc6.metric("Avg Doors/Day",   r["avg_per_day"])
         mc7.metric("Total Days",      r["days_active"])
 
