@@ -65,19 +65,16 @@ def load_any_file(uploaded_file):
     for enc in ["utf-16", "utf-8-sig", "utf-8", "latin-1"]:
         try:
             text = raw.decode(enc)
-            if text.startswith("\ufeff"):
-                text = text[1:]
-            df = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
-            df.columns = df.columns.str.strip()
-            if len(df.columns) > 1:
-                return df
-        except Exception:
-            continue
-    for enc in ["utf-8-sig", "utf-8", "latin-1"]:
-        try:
-            text = raw.decode(enc)
-            df = pd.read_csv(io.StringIO(text), dtype=str)
-            df.columns = df.columns.str.strip()
+            text = text.lstrip("\ufeff\ufffe\u200b")
+            lines = text.splitlines()
+            # Skip MiniVAN SEP= header line if present
+            if lines and lines[0].strip().upper().startswith("SEP="):
+                text = "\n".join(lines[1:])
+            # Detect separator from first line
+            first = text.splitlines()[0] if text.splitlines() else ""
+            sep = "\t" if "\t" in first else ","
+            df = pd.read_csv(io.StringIO(text), sep=sep, dtype=str)
+            df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False)
             if len(df.columns) > 1:
                 return df
         except Exception:
@@ -175,23 +172,31 @@ df_ind = pd.concat(dfs, ignore_index=True)
 if len(dfs) > 1:
     st.info("Combined: " + str(len(df_ind)) + " records across both turfs")
 
-# Normalize column names for individual file
-# Handle "Date Canvassed" vs "DateCanvassed"
-for old, new in [("Date Canvassed","DateCanvassed"),("Contact Result","ContactResult"),
-                  ("VanID","VANID"),("Van ID","VANID")]:
-    if old in df_ind.columns:
-        df_ind = df_ind.rename(columns={old: new})
+# Normalize column names — handles both bulk export and MiniVAN individual format
+col_renames = {}
+for col in df_ind.columns:
+    cl = col.lower().strip()
+    if cl == "date canvassed" or cl == "datecanvassed":
+        col_renames[col] = "DateCanvassed"
+    elif cl == "contact result" or cl == "resultshortname":
+        col_renames[col] = "ContactResult"
+    elif cl in ("vanid", "van id", "voter file vanid"):
+        col_renames[col] = "VANID"
+    elif cl == "address":
+        col_renames[col] = "Address"
+    elif cl == "name":
+        col_renames[col] = "VoterName"
+df_ind = df_ind.rename(columns=col_renames)
 
+# Fallback fuzzy matches
 if "DateCanvassed" not in df_ind.columns:
-    # Try to find any date-like column
-    date_cols = [c for c in df_ind.columns if "date" in c.lower() or "canvass" in c.lower()]
+    date_cols = [c for c in df_ind.columns if "date" in c.lower()]
     if date_cols:
         df_ind = df_ind.rename(columns={date_cols[0]: "DateCanvassed"})
-
 if "ContactResult" not in df_ind.columns:
-    result_cols = [c for c in df_ind.columns if "result" in c.lower() or "contact" in c.lower()]
-    if result_cols:
-        df_ind = df_ind.rename(columns={result_cols[0]: "ContactResult"})
+    res_cols = [c for c in df_ind.columns if "result" in c.lower() or "contact" in c.lower()]
+    if res_cols:
+        df_ind = df_ind.rename(columns={res_cols[0]: "ContactResult"})
 
 # Parse dates
 if "DateCanvassed" in df_ind.columns:
@@ -234,13 +239,32 @@ else:
     contact_rate = 0
 
 id_col = next((c for c in ["VANID","Voter File VANID","VoterVANID"] if c in df_ind.columns), None)
-doors = df_ind[id_col].nunique() if id_col else total_attempts
 
-p1,p2,p3,p4 = st.columns(4)
+# Count real doors — deduplicate by base address (strip apt/unit)
+# If no address column, fall back to unique VANIDs
+def base_address(addr):
+    if pd.isna(addr): return None
+    return re.sub(r"\s*(apt|unit|#|ste|suite|fl|floor|rm|room)[\s\.\-#]*\w*", "",
+                  str(addr), flags=re.IGNORECASE).strip().lower()
+
+if "Address" in df_ind.columns:
+    df_ind["BaseAddress"] = df_ind["Address"].apply(base_address)
+    doors = df_ind["BaseAddress"].dropna().nunique()
+    door_source = "physical addresses"
+elif id_col:
+    doors = df_ind[id_col].nunique()
+    door_source = "unique residents (no address column)"
+else:
+    doors = total_attempts
+    door_source = "total attempts (no ID or address column)"
+
+p1,p2,p3,p4,p5 = st.columns(5)
 p1.metric("Doors Knocked",  doors)
-p2.metric("Contacted",      contacted_n)
-p3.metric("Contact Rate",   str(contact_rate) + "%")
-p4.metric("Total Attempts", total_attempts)
+p2.metric("Total Attempts", total_attempts)
+p3.metric("Contacted",      contacted_n)
+p4.metric("Contact Rate",   str(contact_rate) + "%")
+p5.metric("Surveys",        len(matching_surveys["Voter File VANID"].unique()) if not matching_surveys.empty and "Voter File VANID" in matching_surveys.columns else 0)
+st.caption("Doors = unique physical addresses" + (" (apt/unit stripped)" if "Address" in df_ind.columns else " — address column not found, using unique residents"))
 
 if "ContactResult" in df_ind.columns:
     result_counts = df_ind["ContactResult"].value_counts()
