@@ -402,9 +402,8 @@ if addr_col and "DateCanvassed" in df_ind.columns:
 if survey_df is not None and not matching_surveys.empty:
     st.markdown('<div class="section-header">📋 Survey Responses</div>', unsafe_allow_html=True)
 
-    s1, s2 = st.columns([1,1])
-    with s1:
-        st.metric("Total Surveys Collected", len(matching_surveys[matching_surveys.get("Question") is not None] if "Question" in matching_surveys.columns else matching_surveys))
+    total_surveyed = matching_surveys["Voter File VANID"].nunique() if "Voter File VANID" in matching_surveys.columns else len(matching_surveys)
+    st.metric("Total Surveys Collected", total_surveyed)
 
     if "Question" in matching_surveys.columns and "Response" in matching_surveys.columns:
         questions_list = matching_surveys["Question"].dropna().unique()
