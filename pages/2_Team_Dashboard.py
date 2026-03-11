@@ -74,10 +74,11 @@ def load_van_file(uploaded_file):
     for enc in ["utf-16", "utf-8-sig", "utf-8", "latin-1"]:
         try:
             text = raw.decode(enc)
-            if text.startswith("\ufeff"):
-                text = text[1:]
+            # Strip all BOM variants
+            text = text.lstrip("\ufeff\ufffe\xef\xbb\xbf")
             df = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
-            df.columns = df.columns.str.strip()
+            # Aggressively clean column names — strip spaces, BOM, invisible chars
+            df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
             if len(df.columns) > 1:
                 return df
         except Exception:
@@ -86,7 +87,7 @@ def load_van_file(uploaded_file):
         try:
             text = raw.decode(enc)
             df = pd.read_csv(io.StringIO(text), dtype=str)
-            df.columns = df.columns.str.strip()
+            df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
             if len(df.columns) > 1:
                 return df
         except Exception:
@@ -295,10 +296,13 @@ if st.session_state.contact_history.empty:
     st.stop()
 
 req_cols = ["ResultShortName","CanvassedBy","DateCanvassed","Voter File VANID"]
-missing_cols = [c for c in req_cols if c not in st.session_state.contact_history.columns]
+# Show available columns for debugging
+available = st.session_state.contact_history.columns.tolist()
+missing_cols = [c for c in req_cols if c not in available]
 if missing_cols:
     st.error("Contact history file is missing columns: " + ", ".join(missing_cols))
-    st.caption("Available: " + ", ".join(st.session_state.contact_history.columns.tolist()))
+    st.info("Columns found in your file: " + ", ".join(available))
+    st.caption("If you see the column name above but slightly different (extra space, symbol), the file may have encoding issues. Try re-exporting from VAN.")
     st.stop()
 
 # ─── PREP DATA ────────────────────────────────────────────────────────────────
