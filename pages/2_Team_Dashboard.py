@@ -608,4 +608,4 @@ if selected_q:
             layout3["xaxis"] = dict(showgrid=False, tickangle=-30)
             layout3["legend"] = dict(font=dict(size=10))
             fig3.update_layout(**layout3)
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, use_container_width=True) 
