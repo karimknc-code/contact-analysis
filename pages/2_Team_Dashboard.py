@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -74,10 +75,8 @@ def load_van_file(uploaded_file):
     for enc in ["utf-16", "utf-8-sig", "utf-8", "latin-1"]:
         try:
             text = raw.decode(enc)
-            # Strip all BOM variants
             text = text.lstrip("\ufeff\ufffe\xef\xbb\xbf")
             df = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
-            # Aggressively clean column names — strip spaces, BOM, invisible chars
             df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
             if len(df.columns) > 1:
                 return df
@@ -135,7 +134,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     contact_rate = round(contacted / doors * 100, 1) if doors > 0 else 0
     unique_surveys = s_df["Voter File VANID"].nunique() if not s_df.empty and "Voter File VANID" in s_df.columns else 0
 
-    # Total days active — all weeks combined
     if "CanvassedBy" in team_c_df.columns and "DateCanvassed" in team_c_df.columns:
         all_canvasser_rows = team_c_df[team_c_df["CanvassedBy"].str.strip() == name.strip()]
         parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
@@ -150,7 +148,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     else:
         days_active = 1
 
-    # Avg doors/day = this week's attempts ÷ days worked this week
     if "DateCanvassed" in c_df.columns:
         parsed_week = pd.to_datetime(c_df["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
         if parsed_week.empty:
@@ -161,7 +158,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
         days_this_week = 1
         avg_per_day = doors
 
-    # Team averages
     team_doors = len(team_c_df)
     n_canv = team_c_df["CanvassedBy"].nunique() if "CanvassedBy" in team_c_df.columns else 1
     avg_team_doors = team_doors / n_canv if n_canv > 0 else 0
@@ -183,7 +179,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     if s_df.empty or "SurveyQuestionLongName" not in s_df.columns:
         return r
 
-    # Script path validation
     try:
         pivoted = s_df.pivot_table(
             index="Voter File VANID",
@@ -211,7 +206,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     r["skip_rate"] = skip_rate
     r["total_surveyed"] = total
 
-    # Integrity flags
     if imp_count > 0:
         r["integrity_flags"].append(("🚩 " + str(imp_count) + " impossible script path" + ("s" if imp_count > 1 else ""), "flag-red"))
 
@@ -310,7 +304,6 @@ if st.session_state.contact_history.empty:
     st.stop()
 
 req_cols = ["ResultShortName","CanvassedBy","DateCanvassed","Voter File VANID"]
-# Show available columns for debugging
 available = st.session_state.contact_history.columns.tolist()
 missing_cols = [c for c in req_cols if c not in available]
 if missing_cols:
@@ -378,7 +371,6 @@ all_results = {}
 for name in canvasser_names:
     c = wk_contacts[wk_contacts["CanvassedBy"] == name]
     s = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
-    # Pass full contact_df (all weeks) so days_active and avg_per_day reflect entire history
     all_results[name] = compute_integrity(name, c, s, contact_df)
 
 # ─── IMPOSSIBLE PATH ALERT STRIP ─────────────────────────────────────────────
@@ -437,6 +429,9 @@ int_labels = {
 for name in display_names:
     r = all_results[name]
 
+    # Sanitize name for use as a key (remove spaces and special chars)
+    name_key = name.replace(" ", "_").replace(",", "").replace(".", "")
+
     if prev_week and not prev_contacts.empty:
         prev_n    = len(prev_contacts[prev_contacts["CanvassedBy"] == name])
         wow       = r["doors"] - prev_n
@@ -492,7 +487,8 @@ for name in display_names:
                         text=rc["Count"], textposition="outside"
                     ))
                     fig.update_layout(title="Contact Results", showlegend=False, **base_layout())
-                    st.plotly_chart(fig, use_container_width=True)
+                    # ✅ FIX: unique key per canvasser
+                    st.plotly_chart(fig, use_container_width=True, key=f"contact_results_{name_key}")
 
             with ch2:
                 if "DateCanvassed" in c_df.columns:
@@ -510,9 +506,10 @@ for name in display_names:
                         textfont=dict(size=10)
                     ))
                     fig2.update_layout(title="Doors Per Day", **base_layout())
-                    st.plotly_chart(fig2, use_container_width=True)
+                    # ✅ FIX: unique key per canvasser
+                    st.plotly_chart(fig2, use_container_width=True, key=f"doors_per_day_{name_key}")
 
-            # Survey response table — one question at a time, clean progress column
+            # Survey response table
             if not s_df.empty and "SurveyQuestionLongName" in s_df.columns:
                 st.markdown("**Survey Responses**")
                 for q in s_df["SurveyQuestionLongName"].dropna().unique():
@@ -586,7 +583,8 @@ if selected_q:
         layout = base_layout(max(200, len(dist)*45))
         layout["margin"] = dict(t=10, b=10, l=0, r=60)
         fig.update_layout(**layout)
-        st.plotly_chart(fig, use_container_width=True)
+        # ✅ FIX: unique key for survey analytics chart
+        st.plotly_chart(fig, use_container_width=True, key="survey_dist_overall")
 
     with qa2:
         if len(all_weeks) > 1:
@@ -602,7 +600,8 @@ if selected_q:
                 fig2 = px.bar(tdf, x="Week", y="Count", color="Response",
                               color_discrete_sequence=COLORS, barmode="stack")
                 fig2.update_layout(**base_layout(300))
-                st.plotly_chart(fig2, use_container_width=True)
+                # ✅ FIX: unique key for WoW trend chart
+                st.plotly_chart(fig2, use_container_width=True, key="survey_wow_trend")
         else:
             st.info("Upload multiple weeks of data to see trends over time.")
 
@@ -625,4 +624,5 @@ if selected_q:
             layout3["xaxis"] = dict(showgrid=False, tickangle=-30)
             layout3["legend"] = dict(font=dict(size=10))
             fig3.update_layout(**layout3)
-            st.plotly_chart(fig3, use_container_width=True)
+            # ✅ FIX: unique key for canvasser comparison chart
+            st.plotly_chart(fig3, use_container_width=True, key="survey_canvasser_comparison")
