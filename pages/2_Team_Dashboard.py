@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -63,28 +64,57 @@ def validate_resident_path(resp):
             violations.append("Demographics skipped: " + ", ".join(missing_demos))
     return violations
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
+COLUMN_MAP = {
+    "VanID":          "Voter File VANID",
+    "Contact Result": "ResultShortName",
+    "Date Canvassed": "DateCanvassed",
+}
 def load_van_file(uploaded_file):
     raw = uploaded_file.read()
+    df = None
+    # Try multiple encodings and separators
     for enc in ["utf-16", "utf-8-sig", "utf-8", "latin-1"]:
         try:
             text = raw.decode(enc)
             text = text.lstrip("\ufeff\ufffe\xef\xbb\xbf")
-            df = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
-            df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
-            if len(df.columns) > 1:
-                return df
+            # Handle SEP=, header line (MiniVAN exports)
+            lines = text.strip().split("\n")
+            if lines and lines[0].strip().startswith("SEP="):
+                sep_char = lines[0].strip().replace("SEP=", "")
+                text = "\n".join(lines[1:])
+                try:
+                    candidate = pd.read_csv(io.StringIO(text), sep=sep_char, dtype=str)
+                    candidate.columns = candidate.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
+                    if len(candidate.columns) > 1:
+                        df = candidate
+                        break
+                except Exception:
+                    pass
+            # Try tab-separated
+            try:
+                candidate = pd.read_csv(io.StringIO(text), sep="\t", dtype=str)
+                candidate.columns = candidate.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
+                if len(candidate.columns) > 1:
+                    df = candidate
+                    break
+            except Exception:
+                pass
+            # Try comma-separated
+            try:
+                candidate = pd.read_csv(io.StringIO(text), dtype=str)
+                candidate.columns = candidate.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
+                if len(candidate.columns) > 1:
+                    df = candidate
+                    break
+            except Exception:
+                pass
         except Exception:
             continue
-    for enc in ["utf-8-sig", "utf-8", "latin-1"]:
-        try:
-            text = raw.decode(enc)
-            df = pd.read_csv(io.StringIO(text), dtype=str)
-            df.columns = df.columns.str.strip().str.replace("\ufeff","",regex=False).str.replace("\ufffe","",regex=False).str.replace("\u200b","",regex=False)
-            if len(df.columns) > 1:
-                return df
-        except Exception:
-            continue
-    return None
+    if df is None:
+        return None
+    # Normalize column names — map MiniVAN names to expected names
+    df.rename(columns=COLUMN_MAP, inplace=True)
+    return df
 def parse_dates(series):
     return pd.to_datetime(series, errors="coerce").dt.normalize()
 def get_week_key(series):
@@ -237,7 +267,7 @@ with st.expander("📂 Upload This Week's VAN Exports", expanded=st.session_stat
     uc1, uc2 = st.columns(2)
     with uc1:
         st.markdown("**Contact History**")
-        st.markdown('<div class="upload-hint">File with ResultShortName / CanvassedBy</div>', unsafe_allow_html=True)
+        st.markdown('<div class="upload-hint">MiniVAN Activity Report or VAN Contact History</div>', unsafe_allow_html=True)
         contact_file = st.file_uploader("Contact history", type=["xls","csv","tsv","txt"], key="cu", label_visibility="collapsed")
     with uc2:
         st.markdown("**Survey Responses**")
@@ -280,7 +310,8 @@ with st.expander("📂 Upload This Week's VAN Exports", expanded=st.session_stat
 if st.session_state.contact_history.empty:
     st.info("Upload your VAN exports above to get started.")
     st.stop()
-req_cols = ["ResultShortName","CanvassedBy","DateCanvassed","Voter File VANID"]
+# Minimum required columns (after column mapping in load_van_file)
+req_cols = ["ResultShortName","DateCanvassed","Voter File VANID"]
 available = st.session_state.contact_history.columns.tolist()
 missing_cols = [c for c in req_cols if c not in available]
 if missing_cols:
@@ -288,6 +319,28 @@ if missing_cols:
     st.info("Columns found in your file: " + ", ".join(available))
     st.caption("If you see the column name above but slightly different (extra space, symbol), the file may have encoding issues. Try re-exporting from VAN.")
     st.stop()
+# ─── RESOLVE CanvassedBy ─────────────────────────────────────────────────────
+# If CanvassedBy is missing from contact data, resolve it from survey data
+# by matching Voter File VANIDs
+if "CanvassedBy" not in st.session_state.contact_history.columns:
+    if not st.session_state.survey_history.empty and "CanvassedBy" in st.session_state.survey_history.columns and "Voter File VANID" in st.session_state.survey_history.columns:
+        vanid_to_canvasser = st.session_state.survey_history.dropna(subset=["Voter File VANID","CanvassedBy"]).drop_duplicates("Voter File VANID").set_index("Voter File VANID")["CanvassedBy"]
+        st.session_state.contact_history["CanvassedBy"] = st.session_state.contact_history["Voter File VANID"].map(vanid_to_canvasser)
+        # For individual MiniVAN files: if most matched VANIDs point to one canvasser,
+        # assign all unmatched rows to that canvasser (it's their packet)
+        matched = st.session_state.contact_history["CanvassedBy"].dropna()
+        if not matched.empty:
+            top_canvasser = matched.value_counts().index[0]
+            top_pct = matched.value_counts().iloc[0] / len(matched)
+            if top_pct >= 0.5:
+                st.session_state.contact_history["CanvassedBy"] = st.session_state.contact_history["CanvassedBy"].fillna(top_canvasser)
+            else:
+                st.session_state.contact_history["CanvassedBy"] = st.session_state.contact_history["CanvassedBy"].fillna("Unknown")
+        else:
+            st.session_state.contact_history["CanvassedBy"] = st.session_state.contact_history["CanvassedBy"].fillna("Unknown")
+    else:
+        st.session_state.contact_history["CanvassedBy"] = "Unknown"
+        st.warning("Contact file has no CanvassedBy column and no survey data to match against. Upload survey data to see per-canvasser breakdowns.")
 # ─── PREP DATA ────────────────────────────────────────────────────────────────
 contact_df = st.session_state.contact_history.copy()
 survey_df  = st.session_state.survey_history.copy()
