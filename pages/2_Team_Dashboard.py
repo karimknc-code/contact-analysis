@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -6,9 +5,7 @@ import plotly.express as px
 import numpy as np
 from datetime import datetime
 import io
-
 st.set_page_config(page_title="Team Dashboard", layout="wide", initial_sidebar_state="collapsed")
-
 # ─── STYLES ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -31,7 +28,6 @@ st.markdown("""
     div[data-testid="stMetricValue"] { font-family:'Syne',sans-serif !important; }
 </style>
 """, unsafe_allow_html=True)
-
 # ─── SCRIPT BRANCHING RULES ───────────────────────────────────────────────────
 Q1  = "Q1. Narcan Kit Ask"
 Q1B = "Q1B Mentalhealth_988"
@@ -42,10 +38,8 @@ Q4A = "26_DHS_Demo"
 Q4B = "26_DHS_Age"
 Q4C = "26_DHS_Gender"
 Q5  = "26_Contact_Info"
-
 QA2_TRIGGERS = ["private insurance", "nj familycare", "njfamily", "insured", "yes curr"]
 QA3_TRIGGERS = ["uninsured", "unsure", "no -"]
-
 def validate_resident_path(resp):
     violations = []
     qs = set(resp.keys())
@@ -68,7 +62,6 @@ def validate_resident_path(resp):
         if missing_demos:
             violations.append("Demographics skipped: " + ", ".join(missing_demos))
     return violations
-
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 def load_van_file(uploaded_file):
     raw = uploaded_file.read()
@@ -92,22 +85,26 @@ def load_van_file(uploaded_file):
         except Exception:
             continue
     return None
-
 def parse_dates(series):
     return pd.to_datetime(series, errors="coerce").dt.normalize()
-
 def get_week_key(series):
     dates = pd.to_datetime(series, errors="coerce")
     return dates.dt.to_period("W-SUN").dt.start_time.dt.strftime("%Y-%m-%d")
-
 def fmt_week(wk):
     try:
         return datetime.strptime(wk, "%Y-%m-%d").strftime("Week of %b %d")
     except Exception:
         return wk
-
+def count_unique_doors(df):
+    """Count unique doors from contact data.
+    Each unique Voter File VANID = one unique door.
+    This correctly handles apartments/multi-family homes where the same
+    street address appears multiple times but each unit (VANID) is a separate door.
+    """
+    if df.empty or "Voter File VANID" not in df.columns:
+        return 0
+    return df["Voter File VANID"].nunique()
 COLORS = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#ef4444","#06b6d4","#f97316"]
-
 def base_layout(height=260):
     return dict(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -116,24 +113,26 @@ def base_layout(height=260):
         xaxis=dict(showgrid=False),
         yaxis=dict(showgrid=True, gridcolor="#1e293b")
     )
-
 # ─── INTEGRITY ENGINE ─────────────────────────────────────────────────────────
 def compute_integrity(name, c_df, s_df, team_c_df):
     r = dict(score="clean", perf_flags=[], integrity_flags=[], script_violations=[],
              doors=0, contacted=0, not_home_pct=0, surveys=0, days_active=0,
              days_this_week=0, avg_per_day=0, contact_rate=0, impossible_count=0,
              skip_rate=0, total_surveyed=0)
-
     if c_df.empty:
         return r
-
-    doors     = len(c_df)
-    contacted = len(c_df[c_df["ResultShortName"] == "Canvassed"]) if "ResultShortName" in c_df.columns else 0
-    not_home  = len(c_df[c_df["ResultShortName"] == "Not Home"])  if "ResultShortName" in c_df.columns else 0
+    # Doors = unique VANIDs (each apartment/unit has its own VANID = its own door)
+    doors     = count_unique_doors(c_df)
+    # Contacted = unique VANIDs with "Canvassed" result
+    contacted = c_df[c_df["ResultShortName"] == "Canvassed"]["Voter File VANID"].nunique() if "ResultShortName" in c_df.columns and "Voter File VANID" in c_df.columns else 0
+    not_home  = c_df[c_df["ResultShortName"] == "Not Home"]["Voter File VANID"].nunique() if "ResultShortName" in c_df.columns and "Voter File VANID" in c_df.columns else 0
     not_home_pct = round(not_home / doors * 100, 1) if doors > 0 else 0
+    # Contact rate = canvassed / unique doors
     contact_rate = round(contacted / doors * 100, 1) if doors > 0 else 0
-    unique_surveys = s_df["Voter File VANID"].nunique() if not s_df.empty and "Voter File VANID" in s_df.columns else 0
-
+    # Surveys = unique VANIDs that have survey responses for this canvasser
+    unique_surveys = 0
+    if not s_df.empty and "Voter File VANID" in s_df.columns:
+        unique_surveys = s_df["Voter File VANID"].nunique()
     if "CanvassedBy" in team_c_df.columns and "DateCanvassed" in team_c_df.columns:
         all_canvasser_rows = team_c_df[team_c_df["CanvassedBy"].str.strip() == name.strip()]
         parsed_all = pd.to_datetime(all_canvasser_rows["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
@@ -147,7 +146,6 @@ def compute_integrity(name, c_df, s_df, team_c_df):
                 r["perf_flags"].append(("⚠️ Inconsistent Daily Output", "flag-yellow"))
     else:
         days_active = 1
-
     if "DateCanvassed" in c_df.columns:
         parsed_week = pd.to_datetime(c_df["DateCanvassed"], format="%m/%d/%y", errors="coerce").dt.normalize().dropna()
         if parsed_week.empty:
@@ -157,28 +155,24 @@ def compute_integrity(name, c_df, s_df, team_c_df):
     else:
         days_this_week = 1
         avg_per_day = doors
-
-    team_doors = len(team_c_df)
+    # Team-level stats (also using unique doors)
+    team_doors = count_unique_doors(team_c_df)
     n_canv = team_c_df["CanvassedBy"].nunique() if "CanvassedBy" in team_c_df.columns else 1
     avg_team_doors = team_doors / n_canv if n_canv > 0 else 0
-    team_contacted = len(team_c_df[team_c_df["ResultShortName"] == "Canvassed"]) if "ResultShortName" in team_c_df.columns else 0
+    team_contacted = team_c_df[team_c_df["ResultShortName"] == "Canvassed"]["Voter File VANID"].nunique() if "ResultShortName" in team_c_df.columns and "Voter File VANID" in team_c_df.columns else 0
     team_rate = round(team_contacted / team_doors * 100, 1) if team_doors > 0 else 0
-
     if doors > avg_team_doors * 1.2:
         r["perf_flags"].append(("🟢 Top Performer", "flag-green"))
     if not_home_pct > 70:
         r["perf_flags"].append(("🔴 Low Contact Rate", "flag-red"))
     if unique_surveys == 0 and doors > 3:
         r["perf_flags"].append(("🔴 No Surveys", "flag-red"))
-
     r.update(dict(doors=doors, contacted=contacted, not_home_pct=not_home_pct,
                   contact_rate=contact_rate, surveys=unique_surveys,
                   days_active=days_active, days_this_week=days_this_week,
                   avg_per_day=avg_per_day))
-
     if s_df.empty or "SurveyQuestionLongName" not in s_df.columns:
         return r
-
     try:
         pivoted = s_df.pivot_table(
             index="Voter File VANID",
@@ -188,10 +182,8 @@ def compute_integrity(name, c_df, s_df, team_c_df):
         )
     except Exception:
         return r
-
     total = len(pivoted)
     imp_count = 0
-
     for vanid, row in pivoted.iterrows():
         resident_resp = {q: v for q, v in row.items() if pd.notna(v)}
         viols = validate_resident_path(resident_resp)
@@ -200,15 +192,12 @@ def compute_integrity(name, c_df, s_df, team_c_df):
             if has_imp:
                 imp_count += 1
             r["script_violations"].append({"vanid": vanid, "violations": viols, "impossible": has_imp})
-
     skip_rate = round(len(r["script_violations"]) / total * 100, 1) if total > 0 else 0
     r["impossible_count"] = imp_count
     r["skip_rate"] = skip_rate
     r["total_surveyed"] = total
-
     if imp_count > 0:
         r["integrity_flags"].append(("🚩 " + str(imp_count) + " impossible script path" + ("s" if imp_count > 1 else ""), "flag-red"))
-
     for q in s_df["SurveyQuestionLongName"].unique():
         vals = s_df[s_df["SurveyQuestionLongName"] == q]["SurveyResponseName"]
         if len(vals) >= 5:
@@ -216,14 +205,11 @@ def compute_integrity(name, c_df, s_df, team_c_df):
             if top_pct >= 0.92:
                 top_r = vals.value_counts().index[0]
                 r["integrity_flags"].append(("⚠️ Uniform on '" + q + "': " + str(round(top_pct*100)) + "% → '" + top_r + "'", "flag-yellow"))
-
     if abs(contact_rate - team_rate) > 25:
         direction = "above" if contact_rate > team_rate else "below"
         r["integrity_flags"].append(("⚠️ Contact rate " + str(contact_rate) + "% vs team " + str(team_rate) + "% (" + direction + ")", "flag-yellow"))
-
     if doors >= 5 and unique_surveys / doors > 0.85:
         r["integrity_flags"].append(("⚠️ Survey/door ratio " + str(round(unique_surveys/doors*100)) + "% — unusually high", "flag-yellow"))
-
     if "DateCanvassed" in s_df.columns:
         by_day = s_df.groupby(parse_dates(s_df["DateCanvassed"])).size()
         if len(by_day) > 0 and by_day.sum() >= 5:
@@ -232,24 +218,19 @@ def compute_integrity(name, c_df, s_df, team_c_df):
                 max_d = by_day.idxmax()
                 day_str = max_d.strftime("%b %d") if hasattr(max_d, "strftime") else str(max_d)
                 r["integrity_flags"].append(("⚠️ " + str(round(max_pct*100)) + "% of surveys on single date (" + day_str + ")", "flag-yellow"))
-
     if imp_count > 0 or len(r["integrity_flags"]) >= 2:
         r["score"] = "flagged"
     elif len(r["integrity_flags"]) >= 1 or skip_rate > 15:
         r["score"] = "watch"
-
     return r
-
 # ─── SESSION STATE ────────────────────────────────────────────────────────────
 for k, v in [("contact_history", pd.DataFrame()), ("survey_history", pd.DataFrame())]:
     if k not in st.session_state:
         st.session_state[k] = v
-
 # ─── HEADER ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="dash-title">Team Dashboard</div>', unsafe_allow_html=True)
 st.markdown('<div class="dash-sub">Field Operations · NJ</div>', unsafe_allow_html=True)
 st.divider()
-
 # ─── UPLOAD ───────────────────────────────────────────────────────────────────
 with st.expander("📂 Upload This Week's VAN Exports", expanded=st.session_state.contact_history.empty):
     st.caption("Upload both files each week — duplicates are automatically skipped.")
@@ -262,7 +243,6 @@ with st.expander("📂 Upload This Week's VAN Exports", expanded=st.session_stat
         st.markdown("**Survey Responses**")
         st.markdown('<div class="upload-hint">File with SurveyQuestionLongName / SurveyResponseName</div>', unsafe_allow_html=True)
         survey_file = st.file_uploader("Survey export", type=["xls","csv","tsv","txt"], key="su", label_visibility="collapsed")
-
     if st.button("Add to Dashboard", type="primary", disabled=(contact_file is None and survey_file is None)):
         added_c = added_s = 0
         if contact_file:
@@ -291,18 +271,15 @@ with st.expander("📂 Upload This Week's VAN Exports", expanded=st.session_stat
                 added_s = len(df)
         st.success("Added " + str(added_c) + " contact records + " + str(added_s) + " survey responses")
         st.rerun()
-
     if not st.session_state.contact_history.empty:
         if st.button("Clear All Data"):
             st.session_state.contact_history = pd.DataFrame()
             st.session_state.survey_history  = pd.DataFrame()
             st.rerun()
-
 # ─── GUARD ────────────────────────────────────────────────────────────────────
 if st.session_state.contact_history.empty:
     st.info("Upload your VAN exports above to get started.")
     st.stop()
-
 req_cols = ["ResultShortName","CanvassedBy","DateCanvassed","Voter File VANID"]
 available = st.session_state.contact_history.columns.tolist()
 missing_cols = [c for c in req_cols if c not in available]
@@ -311,49 +288,40 @@ if missing_cols:
     st.info("Columns found in your file: " + ", ".join(available))
     st.caption("If you see the column name above but slightly different (extra space, symbol), the file may have encoding issues. Try re-exporting from VAN.")
     st.stop()
-
 # ─── PREP DATA ────────────────────────────────────────────────────────────────
 contact_df = st.session_state.contact_history.copy()
 survey_df  = st.session_state.survey_history.copy()
-
 contact_df["WeekKey"] = get_week_key(contact_df["DateCanvassed"])
 if not survey_df.empty:
     date_col = "DateCanvassed" if "DateCanvassed" in survey_df.columns else "DateCreated"
     if date_col in survey_df.columns:
         survey_df["WeekKey"] = get_week_key(survey_df[date_col])
-
 all_weeks = sorted(contact_df["WeekKey"].dropna().unique(), reverse=True)
-
 if len(all_weeks) > 1:
     selected_week = st.selectbox("Viewing week:", options=all_weeks, format_func=fmt_week)
 else:
     selected_week = all_weeks[0] if all_weeks else None
     if selected_week:
         st.caption("Showing: " + fmt_week(selected_week))
-
 if not selected_week:
     st.warning("No date information found in uploaded files.")
     st.stop()
-
 wk_contacts = contact_df[contact_df["WeekKey"] == selected_week].copy()
 wk_surveys  = survey_df[survey_df["WeekKey"] == selected_week].copy() if "WeekKey" in survey_df.columns else survey_df.copy()
-
 sorted_weeks  = sorted(all_weeks)
 prev_weeks    = [w for w in sorted_weeks if w < selected_week]
 prev_week     = prev_weeks[-1] if prev_weeks else None
 prev_contacts = contact_df[contact_df["WeekKey"] == prev_week] if prev_week else pd.DataFrame()
-
 # ─── CAMPAIGN TOTALS ──────────────────────────────────────────────────────────
 st.markdown('<div class="section-header">Campaign Overview</div>', unsafe_allow_html=True)
-
-total_doors      = len(wk_contacts)
-total_contacted  = len(wk_contacts[wk_contacts["ResultShortName"] == "Canvassed"])
+# Doors = unique VANIDs (each apartment/unit has its own VANID)
+total_doors      = count_unique_doors(wk_contacts)
+total_contacted  = wk_contacts[wk_contacts["ResultShortName"] == "Canvassed"]["Voter File VANID"].nunique() if "Voter File VANID" in wk_contacts.columns else 0
 total_surveys    = wk_surveys["Voter File VANID"].nunique() if not wk_surveys.empty and "Voter File VANID" in wk_surveys.columns else 0
 total_canvassers = wk_contacts["CanvassedBy"].nunique()
 contact_rate_all = round(total_contacted / total_doors * 100, 1) if total_doors > 0 else 0
-prev_doors_n     = len(prev_contacts)
+prev_doors_n     = count_unique_doors(prev_contacts)
 wow_doors        = total_doors - prev_doors_n if prev_week else None
-
 m1, m2, m3, m4 = st.columns(4)
 with m1:
     delta_str = ("+" + str(wow_doors) if wow_doors > 0 else str(wow_doors)) if wow_doors is not None else None
@@ -364,7 +332,6 @@ with m3:
     st.metric("Surveys Completed", str(total_surveys))
 with m4:
     st.metric("Active Canvassers", str(total_canvassers))
-
 # ─── BUILD CANVASSER DATA ─────────────────────────────────────────────────────
 canvasser_names = sorted(wk_contacts["CanvassedBy"].dropna().unique())
 all_results = {}
@@ -372,7 +339,6 @@ for name in canvasser_names:
     c = wk_contacts[wk_contacts["CanvassedBy"] == name]
     s = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
     all_results[name] = compute_integrity(name, c, s, contact_df)
-
 # ─── IMPOSSIBLE PATH ALERT STRIP ─────────────────────────────────────────────
 flagged_names = [n for n in canvasser_names if all_results[n]["impossible_count"] > 0]
 if flagged_names:
@@ -386,10 +352,8 @@ if flagged_names:
                 for viol in v["violations"]:
                     if "IMPOSSIBLE PATH" in viol:
                         st.markdown('<div class="impossible-box">VANID ' + str(v["vanid"]) + ': ' + viol + '</div>', unsafe_allow_html=True)
-
 # ─── SORT & FILTER ────────────────────────────────────────────────────────────
 st.markdown('<div class="section-header">Canvasser Cards</div>', unsafe_allow_html=True)
-
 ctrl1, ctrl2, ctrl3 = st.columns([1,1,2])
 with ctrl1:
     sort_by = st.selectbox("Sort by", ["Doors","Contacted","Surveys","Integrity","Avg Doors/Day"])
@@ -397,9 +361,7 @@ with ctrl2:
     filter_by = st.selectbox("Filter", ["All","Flagged / Watch","Clean only"])
 with ctrl3:
     search = st.text_input("Search", placeholder="Canvasser name...")
-
 score_order = {"flagged":0,"watch":1,"clean":2}
-
 def sort_key(n):
     r = all_results[n]
     if sort_by == "Doors":          return -r["doors"]
@@ -408,7 +370,6 @@ def sort_key(n):
     if sort_by == "Integrity":      return score_order.get(r["score"], 2)
     if sort_by == "Avg Doors/Day":  return -r["avg_per_day"]
     return 0
-
 display_names = sorted(canvasser_names, key=sort_key)
 if filter_by == "Flagged / Watch":
     display_names = [n for n in display_names if all_results[n]["score"] in ("flagged","watch")]
@@ -416,32 +377,24 @@ elif filter_by == "Clean only":
     display_names = [n for n in display_names if all_results[n]["score"] == "clean"]
 if search:
     display_names = [n for n in display_names if search.lower() in n.lower()]
-
 st.caption("Showing " + str(len(display_names)) + " of " + str(len(all_results)) + " canvassers")
-
 # ─── CANVASSER CARDS ──────────────────────────────────────────────────────────
 int_labels = {
     "clean":   ("● Data looks clean",  "integrity-clean"),
     "watch":   ("● Worth monitoring",  "integrity-watch"),
     "flagged": ("● Integrity concern", "integrity-flagged"),
 }
-
 for name in display_names:
     r = all_results[name]
-
-    # Sanitize name for use as a key (remove spaces and special chars)
     name_key = name.replace(" ", "_").replace(",", "").replace(".", "")
-
     if prev_week and not prev_contacts.empty:
-        prev_n    = len(prev_contacts[prev_contacts["CanvassedBy"] == name])
+        prev_n    = count_unique_doors(prev_contacts[prev_contacts["CanvassedBy"] == name])
         wow       = r["doors"] - prev_n
         wow_str   = ("▲ " if wow > 0 else "▼ " if wow < 0 else "— ") + str(abs(wow)) + " vs last week"
         wow_color = "#22c55e" if wow > 0 else "#ef4444" if wow < 0 else "#64748b"
     else:
         wow_str = wow_color = None
-
     int_label, int_class = int_labels[r["score"]]
-
     with st.container():
         n_col, w_col = st.columns([4,1])
         with n_col:
@@ -459,21 +412,17 @@ for name in display_names:
                     '<div style="text-align:right;font-size:0.85rem;color:' + wow_color + ';font-weight:600;padding-top:8px;">' + wow_str + '</div>',
                     unsafe_allow_html=True
                 )
-
         c_df = wk_contacts[wk_contacts["CanvassedBy"] == name]
         s_df = wk_surveys[wk_surveys["CanvassedBy"] == name] if not wk_surveys.empty and "CanvassedBy" in wk_surveys.columns else pd.DataFrame()
-
-        mc1,mc2,mc3,mc4,mc5,mc6,mc7 = st.columns(7)
+        # Performance snapshot — 6 metrics, NO attempts
+        mc1,mc2,mc3,mc4,mc5,mc6 = st.columns(6)
         mc1.metric("Doors",           r["doors"])
-        mc2.metric("Contacted",       r["contacted"])
+        mc2.metric("Contact Rate",    str(r["contact_rate"]) + "%")
         mc3.metric("Surveys",         r["surveys"])
         mc4.metric("Not Home %",      str(r["not_home_pct"]) + "%")
         mc5.metric("Days This Week",  r["days_this_week"])
         mc6.metric("Avg Doors/Day",   r["avg_per_day"])
-        mc7.metric("Total Days",      r["days_active"])
-
         with st.expander("🔍 Deep dive — " + name.split(",")[0].strip()):
-
             ch1, ch2 = st.columns(2)
             with ch1:
                 if "ResultShortName" in c_df.columns:
@@ -487,9 +436,7 @@ for name in display_names:
                         text=rc["Count"], textposition="outside"
                     ))
                     fig.update_layout(title="Contact Results", showlegend=False, **base_layout())
-                    # ✅ FIX: unique key per canvasser
                     st.plotly_chart(fig, use_container_width=True, key=f"contact_results_{name_key}")
-
             with ch2:
                 if "DateCanvassed" in c_df.columns:
                     c2 = c_df.copy()
@@ -506,10 +453,7 @@ for name in display_names:
                         textfont=dict(size=10)
                     ))
                     fig2.update_layout(title="Doors Per Day", **base_layout())
-                    # ✅ FIX: unique key per canvasser
                     st.plotly_chart(fig2, use_container_width=True, key=f"doors_per_day_{name_key}")
-
-            # Survey response table
             if not s_df.empty and "SurveyQuestionLongName" in s_df.columns:
                 st.markdown("**Survey Responses**")
                 for q in s_df["SurveyQuestionLongName"].dropna().unique():
@@ -530,8 +474,6 @@ for name in display_names:
                             "%": st.column_config.ProgressColumn("%", min_value=0, max_value=100, format="%d%%")
                         }
                     )
-
-            # Script violations
             viols = r.get("script_violations", [])
             if viols:
                 imp   = [v for v in viols if v["impossible"]]
@@ -552,24 +494,17 @@ for name in display_names:
                             st.caption("... and " + str(len(other)-10) + " more")
             elif not s_df.empty:
                 st.success("✅ All surveyed residents followed correct script paths")
-
             st.caption("→ For timestamps, idle periods & street analysis open Agent Monitor with " + name.split(",")[0].strip() + "'s individual file.")
-
         st.divider()
-
 # ─── SURVEY ANALYTICS ─────────────────────────────────────────────────────────
 st.markdown('<div class="section-header">📊 Data Analytics — Survey Response Trends</div>', unsafe_allow_html=True)
-
 if survey_df.empty or "SurveyQuestionLongName" not in survey_df.columns:
     st.info("Upload a survey file to see response analytics.")
     st.stop()
-
 questions_all = sorted(survey_df["SurveyQuestionLongName"].dropna().unique())
 selected_q    = st.selectbox("Select survey question", questions_all)
-
 if selected_q:
     qa1, qa2 = st.columns([1, 1.6])
-
     with qa1:
         st.markdown("**Overall distribution — all weeks**")
         dist = survey_df[survey_df["SurveyQuestionLongName"] == selected_q]["SurveyResponseName"].value_counts().reset_index()
@@ -583,9 +518,7 @@ if selected_q:
         layout = base_layout(max(200, len(dist)*45))
         layout["margin"] = dict(t=10, b=10, l=0, r=60)
         fig.update_layout(**layout)
-        # ✅ FIX: unique key for survey analytics chart
         st.plotly_chart(fig, use_container_width=True, key="survey_dist_overall")
-
     with qa2:
         if len(all_weeks) > 1:
             st.markdown("**Week-over-week trend**")
@@ -600,11 +533,9 @@ if selected_q:
                 fig2 = px.bar(tdf, x="Week", y="Count", color="Response",
                               color_discrete_sequence=COLORS, barmode="stack")
                 fig2.update_layout(**base_layout(300))
-                # ✅ FIX: unique key for WoW trend chart
                 st.plotly_chart(fig2, use_container_width=True, key="survey_wow_trend")
         else:
             st.info("Upload multiple weeks of data to see trends over time.")
-
     st.markdown("**Canvasser response comparison — _" + selected_q + "_**")
     st.caption("Canvassers with very different distributions vs the team are worth investigating.")
     if "CanvassedBy" in wk_surveys.columns and not wk_surveys.empty:
@@ -624,5 +555,4 @@ if selected_q:
             layout3["xaxis"] = dict(showgrid=False, tickangle=-30)
             layout3["legend"] = dict(font=dict(size=10))
             fig3.update_layout(**layout3)
-            # ✅ FIX: unique key for canvasser comparison chart
             st.plotly_chart(fig3, use_container_width=True, key="survey_canvasser_comparison")
