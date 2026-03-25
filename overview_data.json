@@ -2260,7 +2260,8 @@
       "attempts": 55,
       "doors": 55,
       "canvassed": 9,
-      "notHome": 47,$      "moved": 0,
+      "notHome": 47,
+      "moved": 0,
       "refused": 0,
       "status": "C"
     },
