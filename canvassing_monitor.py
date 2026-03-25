@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import os
 import pandas as pd
@@ -333,51 +334,41 @@ if search_term:
             metrics = calculate_metrics(canvasser)
             needs_attn = needs_attention(metrics)
 
-            st.markdown(f"""
+            card_html = f"""
+            <html><head><style>
+                body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: transparent; }}
+                .canvasser-card {{ background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%); border: 1px solid #4a5568; border-radius: 12px; padding: 28px; }}
+                .canvasser-name {{ font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+                .status-committed {{ display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: rgba(76,175,80,0.15); color: #4caf50; border: 1px solid rgba(76,175,80,0.3); }}
+                .status-pending {{ display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: rgba(255,152,0,0.15); color: #ff9800; border: 1px solid rgba(255,152,0,0.3); }}
+                .alert-badge {{ display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; background: rgba(244,67,54,0.15); color: #f44336; border: 1px solid rgba(244,67,54,0.3); }}
+                .list-name {{ font-size: 12px; color: #a0aec0; margin-bottom: 16px; font-family: 'Courier New', monospace; }}
+                .performance-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }}
+                .perf-item {{ background: rgba(79,158,245,0.1); border: 1px solid rgba(79,158,245,0.2); border-radius: 8px; padding: 12px; text-align: center; }}
+                .perf-value {{ font-size: 20px; font-weight: 700; color: #4f9ef5; font-family: 'Courier New', monospace; }}
+                .perf-label {{ font-size: 11px; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }}
+            </style></head><body>
             <div class="canvasser-card">
                 <div class="canvasser-name">
                     {canvasser['canvasser']}
                     <span class="{get_status_color(canvasser['status'])}">{get_status_text(canvasser['status'])}</span>
-                    {' <span class="alert-badge">Needs Attention</span>' if needs_attn else ''}
+                    {'<span class="alert-badge">Needs Attention</span>' if needs_attn else ''}
                 </div>
                 <div class="list-name">{canvasser['listName']}</div>
-
                 <div class="performance-grid">
-                    <div class="perf-item">
-                        <div class="perf-value">{canvasser['attempts']}</div>
-                        <div class="perf-label">Attempts</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{metrics['doors']}</div>
-                        <div class="perf-label">Doors</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{canvasser['canvassed']}</div>
-                        <div class="perf-label">Canvassed</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{metrics['contact_rate']}%</div>
-                        <div class="perf-label">Contact Rate</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{canvasser['notHome']}</div>
-                        <div class="perf-label">Not Home</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{canvasser['refused']}</div>
-                        <div class="perf-label">Refused</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{canvasser['moved']}</div>
-                        <div class="perf-label">Moved</div>
-                    </div>
-                    <div class="perf-item">
-                        <div class="perf-value">{metrics['refused_rate']}%</div>
-                        <div class="perf-label">Refused Rate</div>
-                    </div>
+                    <div class="perf-item"><div class="perf-value">{canvasser['attempts']}</div><div class="perf-label">Attempts</div></div>
+                    <div class="perf-item"><div class="perf-value">{metrics['doors']}</div><div class="perf-label">Doors</div></div>
+                    <div class="perf-item"><div class="perf-value">{canvasser['canvassed']}</div><div class="perf-label">Canvassed</div></div>
+                    <div class="perf-item"><div class="perf-value">{metrics['contact_rate']}%</div><div class="perf-label">Contact Rate</div></div>
+                    <div class="perf-item"><div class="perf-value">{canvasser['notHome']}</div><div class="perf-label">Not Home</div></div>
+                    <div class="perf-item"><div class="perf-value">{canvasser['refused']}</div><div class="perf-label">Refused</div></div>
+                    <div class="perf-item"><div class="perf-value">{canvasser['moved']}</div><div class="perf-label">Moved</div></div>
+                    <div class="perf-item"><div class="perf-value">{metrics['refused_rate']}%</div><div class="perf-label">Refused Rate</div></div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            </body></html>
+            """
+            components.html(card_html, height=220)
     else:
         st.info("No canvassers found matching your search. Try another name.")
 else:
