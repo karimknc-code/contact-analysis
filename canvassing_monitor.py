@@ -1,4 +1,3 @@
-
 import streamlit as st
 import streamlit.components.v1 as components
 import json
@@ -314,7 +313,7 @@ def render_performance_card(canvasser, metrics, needs_attn, attn_reasons):
             <span class="{get_status_color(canvasser['status'])}">{get_status_text(canvasser['status'])}</span>
             {attn_badge}
         </div>
-        <div class="list">{canvasser['listName']}</div>
+        <div class="list">{'Combined — ' if ',' in canvasser['listName'] else ''}{canvasser['listName']}</div>
         {reasons_html}
         <div class="grid">
             <div class="item"><div class="val">{canvasser['attempts']}</div><div class="lbl">Attempts</div></div>
@@ -662,44 +661,143 @@ if search_term:
 else:
     filtered = []
 
+# Group filtered results by canvasser name
+def group_by_canvasser(entries):
+    """Group list entries by canvasser name"""
+    groups = {}
+    for entry in entries:
+        name = entry['canvasser']
+        if name not in groups:
+            groups[name] = []
+        groups[name].append(entry)
+    return groups
+
 # Results
 if search_term:
     if filtered:
-        st.subheader(f"Search Results: {len(filtered)} match(es)")
+        grouped = group_by_canvasser(filtered)
+        total_entries = len(filtered)
+        st.subheader(f"Search Results: {len(grouped)} canvasser(s), {total_entries} assignment(s)")
 
-        for canvasser in filtered:
-            metrics = calculate_metrics(canvasser)
+        for canvasser_name, entries in grouped.items():
+            # Combined metrics across all lists
+            total_attempts = sum(e.get('attempts', 0) for e in entries)
+            total_doors = sum(e.get('doors', 0) for e in entries)
+            total_canvassed = sum(e.get('canvassed', 0) for e in entries)
+            total_not_home = sum(e.get('notHome', 0) for e in entries)
+            total_refused = sum(e.get('refused', 0) for e in entries)
+            total_moved = sum(e.get('moved', 0) for e in entries)
+            combined_contact_rate = round((total_canvassed / total_attempts) * 100, 1) if total_attempts > 0 else 0
+            combined_refused_rate = round((total_refused / total_attempts) * 100, 1) if total_attempts > 0 else 0
 
-            # Load detail data if available
-            detail = load_detail_data(canvasser['listName'])
+            # Collect detail data across all lists
+            all_details = []
+            detail_lists_scraped = []
+            detail_lists_pending = []
+            for entry in entries:
+                d = load_detail_data(entry['listName'])
+                if d:
+                    all_details.append(d)
+                    detail_lists_scraped.append(entry['listName'])
+                else:
+                    detail_lists_pending.append(entry['listName'])
 
-            # Get survey matches
-            survey_matches = match_canvasser_in_survey(canvasser['canvasser'], survey_df)
+            # Merge all contacts from all detail files
+            merged_detail = None
+            if all_details:
+                all_contacts = []
+                for d in all_details:
+                    all_contacts.extend(d.get('contacts', []))
+                merged_detail = {
+                    'canvasser': canvasser_name,
+                    'contacts': all_contacts,
+                    'summary': {
+                        'total_attempts': total_attempts,
+                        'total_doors': total_doors,
+                        'canvassed': total_canvassed,
+                    }
+                }
 
-            # Time analysis
-            time_data = calculate_time_analysis(detail)
+            has_detail = merged_detail is not None
 
-            # Fraud detection
-            fraud_info = detect_fraud(detail, survey_matches)
+            # Survey matches
+            survey_matches = match_canvasser_in_survey(canvasser_name, survey_df)
+
+            # Time analysis (only if detail data exists)
+            time_data = calculate_time_analysis(merged_detail) if has_detail else None
+
+            # Fraud detection (only if both detail and survey exist)
+            fraud_info = detect_fraud(merged_detail, survey_matches) if has_detail else None
 
             # Composite status
-            needs_attn, attn_reasons = compute_attention_status(metrics, time_data, fraud_info)
+            combined_metrics = {
+                'contact_rate': combined_contact_rate,
+                'refused_rate': combined_refused_rate,
+                'doors': total_doors
+            }
+            needs_attn, attn_reasons = compute_attention_status(combined_metrics, time_data, fraud_info)
+
+            # Use first entry for status badge
+            primary = entries[0]
+
+            # Build combined canvasser object for the card
+            combined_canvasser = {
+                'canvasser': canvasser_name,
+                'status': primary['status'],
+                'listName': ', '.join(e['listName'] for e in entries) if len(entries) > 1 else entries[0]['listName'],
+                'attempts': total_attempts,
+                'doors': total_doors,
+                'canvassed': total_canvassed,
+                'notHome': total_not_home,
+                'refused': total_refused,
+                'moved': total_moved,
+            }
+
+            # Show assignment count if multiple
+            if len(entries) > 1:
+                st.caption(f"**{len(entries)} assignments** for this canvasser today")
 
             # 1. Performance Card (always shown)
-            render_performance_card(canvasser, metrics, needs_attn, attn_reasons)
+            render_performance_card(combined_canvasser, combined_metrics, needs_attn, attn_reasons)
 
-            # Collapsible sections
+            # Per-list breakdown if multiple assignments
+            if len(entries) > 1:
+                with st.expander(f"📋 Per-List Breakdown ({len(entries)} lists)", expanded=False):
+                    for entry in entries:
+                        m = calculate_metrics(entry)
+                        status_label = "Committed" if entry['status'] == 'C' else "Pending"
+                        scraped_tag = "✅" if entry['listName'] in detail_lists_scraped else "⏳"
+                        st.markdown(f"""
+**{entry['listName']}** {scraped_tag} — {status_label}
+| Attempts | Doors | Canvassed | Contact Rate | Refused |
+|----------|-------|-----------|--------------|---------|
+| {entry['attempts']} | {entry.get('doors',0)} | {entry['canvassed']} | {m['contact_rate']}% | {entry['refused']} |
+""")
+
+            # Survey breakout (always available if survey uploaded)
             with st.expander("📊 Survey Breakout", expanded=False):
                 render_survey_breakout(survey_matches)
 
-            with st.expander("🗺️ Walking Path", expanded=False):
-                render_walking_map(detail)
+            # Walking Path / Time Analysis / Fraud — ONLY show if detail data exists
+            if has_detail:
+                with st.expander("🗺️ Walking Path", expanded=False):
+                    render_walking_map(merged_detail)
 
-            with st.expander("⏱️ Time Analysis", expanded=False):
-                render_time_analysis(time_data)
+                with st.expander("⏱️ Time Analysis", expanded=False):
+                    render_time_analysis(time_data)
 
-            with st.expander("🔍 Verification / Fraud Detection", expanded=False):
-                render_fraud_detection(fraud_info)
+                with st.expander("🔍 Verification / Fraud Detection", expanded=False):
+                    render_fraud_detection(fraud_info)
+            else:
+                # Subtle note instead of empty expanders
+                pending_count = len(detail_lists_pending)
+                st.markdown(
+                    f'<div style="padding:8px 16px;background:rgba(79,158,245,0.08);border:1px solid rgba(79,158,245,0.15);border-radius:8px;font-size:13px;color:#718096;margin:8px 0;">'
+                    f'📍 Walking path, time analysis, and fraud detection appear after detail scrape '
+                    f'<span style="color:#4f9ef5;">({pending_count} list{"s" if pending_count != 1 else ""} pending)</span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
 
             st.markdown("---")
     else:
