@@ -1,0 +1,48 @@
+{
+  "canvasser": "Washington, Nassir",
+  "list_name": "List 56092550-82580",
+  "scraped_at": "2026-03-26T02:44:39.283Z",
+  "total_contacts": 5,
+  "contacts": [
+    {
+      "vanid": "12529604",
+      "name": "Jerry, Albert W",
+      "address": "54 Sylvester St",
+      "contact_result": "Not Home",
+      "list_name": "List 56092550-82580",
+      "date_canvassed": "3/25/2026 5:55:32 PM"
+    },
+    {
+      "vanid": "8926241",
+      "name": "Alford, Laverne M",
+      "address": "54 Sylvester St",
+      "contact_result": "Not Home",
+      "list_name": "List 56092550-82580",
+      "date_canvassed": "3/25/2026 5:55:28 PM"
+    },
+    {
+      "vanid": "4465567",
+      "name": "Spriggs, Gregory M",
+      "address": "34 Sylvester St",
+      "contact_result": "Not Home",
+      "list_name": "List 56092550-82580",
+      "date_canvassed": "3/25/2026 5:53:59 PM"
+    },
+    {
+      "vanid": "15825310",
+      "name": "Mystal, Gregory",
+      "address": "11 Nassau St",
+      "contact_result": "Canvassed",
+      "list_name": "List 56092550-82580",
+      "date_canvassed": "3/25/2026 5:41:02 PM"
+    },
+    {
+      "vanid": "11431272",
+      "name": "Vizcaino-Paulino, Mariela D",
+      "address": "515 Brunswick Ave",
+      "contact_result": "Canvassed",
+      "list_name": "List 56092550-82580",
+      "date_canvassed": "3/25/2026 12:59:05 PM"
+    }
+  ]
+}
